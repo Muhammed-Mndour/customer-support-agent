@@ -43,6 +43,9 @@ def supervisor_says(answer):
 
 def check(label, result, expected):
     passed = outcome(result) == expected
+    # Refund results must say plainly whether money moved: true only when refunded.
+    if "refunded" in result and result["refunded"] != (result.get("status") == "refunded"):
+        passed = False
     results.append(passed)
     print(f"\n[{'PASS' if passed else 'FAIL'}] {label}  (expected: {expected})")
     print("   " + json.dumps(result, ensure_ascii=False))

@@ -169,13 +169,16 @@ def refund_order(customer_id, order_id, approve_refund=None):
 
     needs_approval = order["amount"] > REFUND_APPROVAL_LIMIT
     if needs_approval:
+        # Every refund result starts with "refunded": true/false. A plain boolean is
+        # much harder for a small model to misread than a sentence about refunds.
         if approve_refund is None:
             return {
+                "refunded": False,
                 "status": "approval_required",
                 "order_id": order_id,
                 "amount_egp": order["amount"],
-                "note": f"Refunds above {REFUND_APPROVAL_LIMIT} EGP need a supervisor, "
-                        "and none is available right now. The refund was NOT made.",
+                "message": f"No money was refunded. Refunds above {REFUND_APPROVAL_LIMIT} EGP "
+                           "need a supervisor, and none is available right now.",
             }
         approved = approve_refund({
             "order_id": order_id,
@@ -185,10 +188,11 @@ def refund_order(customer_id, order_id, approve_refund=None):
         })
         if not approved:
             return {
+                "refunded": False,
                 "status": "rejected",
                 "order_id": order_id,
                 "amount_egp": order["amount"],
-                "note": "A supervisor rejected this refund. The refund was NOT made.",
+                "message": "A human supervisor rejected this refund. No money was refunded.",
             }
 
     connection = get_connection()
@@ -196,10 +200,12 @@ def refund_order(customer_id, order_id, approve_refund=None):
         connection.execute("UPDATE orders SET refunded = 1 WHERE id = ?", (order_id,))
     connection.close()
     return {
-        "success": True,
+        "refunded": True,
+        "status": "refunded",
         "order_id": order_id,
-        "refunded_egp": order["amount"],
+        "amount_egp": order["amount"],
         "approved_by_supervisor": needs_approval,
+        "message": f"{order['amount']} EGP was refunded to the customer.",
     }
 
 
