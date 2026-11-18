@@ -81,7 +81,10 @@ def run_job(job, client, messages):
         # Undo this turn so the conversation stays valid, then let the customer retry.
         del messages[turn_start:]
         job.error = str(exc)
-        job.answer = "حصلت مشكلة في الاتصال، ممكن تبعت رسالتك تاني؟"
+        job.answer = agent.in_customer_language(
+            job.prompt,
+            "There was a connection problem. Could you send your message again?",
+            "حدثت مشكلة في الاتصال. هل يمكنك إرسال رسالتك مرة أخرى؟")
     except agent.TurnFailed as exc:
         del messages[turn_start:]
         job.answer = str(exc)

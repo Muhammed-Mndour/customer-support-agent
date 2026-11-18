@@ -10,6 +10,7 @@ Two loops:
 
 import json
 import os
+import re
 import sys
 from datetime import date
 
@@ -33,7 +34,8 @@ SYSTEM_PROMPT = f"""You are a customer support agent for an online store in Egyp
 Today's date is {date.today().isoformat()}.
 
 How you talk:
-- Reply in friendly, polite Egyptian Arabic, short and clear.
+- Reply in the language the customer writes in: English to English, Arabic to Arabic.
+  If they switch language, switch with them. Be friendly, polite, short and clear.
 - Write product names, order numbers and dates the way the tools return them.
 
 How you work:
@@ -53,6 +55,12 @@ How you work:
 
 class TurnFailed(Exception):
     """The agent couldn't finish this customer message. The text is for the customer."""
+
+
+def in_customer_language(customer_text, english, arabic):
+    """Pick the customer's language for the few messages the code writes itself,
+    without the model. Any Arabic letter in their message means Arabic."""
+    return arabic if re.search(r"[؀-ۿ]", customer_text) else english
 
 
 # --- Printing what happens inside the loop -----------------------------------
@@ -140,6 +148,10 @@ def run_agent_turn(client, messages, on_event=print_event, approve_refund=None):
 
     supervisor = ask_supervisor if approve_refund else None
 
+    # The customer's latest text, so the code's own error messages match their language.
+    customer_text = next((m["content"] for m in reversed(messages)
+                          if m["role"] == "user" and isinstance(m["content"], str)), "")
+
     for step in range(1, MAX_STEPS + 1):
         on_event("step", step)
         response = client.messages.create(
@@ -174,9 +186,15 @@ def run_agent_turn(client, messages, on_event=print_event, approve_refund=None):
                 on_event("tool_call", (block.name, block.input))
 
         if response.stop_reason == "refusal":
-            raise TurnFailed("آسف، مش هقدر أساعد في الطلب ده.")
+            raise TurnFailed(in_customer_language(
+                customer_text,
+                "Sorry, I can't help with this request.",
+                "عذرًا، لا أستطيع المساعدة في هذا الطلب."))
         if response.stop_reason == "max_tokens":
-            raise TurnFailed("حصلت مشكلة وأنا بجهز الرد، ممكن تعيد رسالتك؟")
+            raise TurnFailed(in_customer_language(
+                customer_text,
+                "Something went wrong while preparing my reply. Could you send your message again?",
+                "حدثت مشكلة أثناء تجهيز الرد. هل يمكنك إرسال رسالتك مرة أخرى؟"))
 
         if response.stop_reason != "tool_use":
             # No tool requested: this is the answer for the customer.
@@ -198,7 +216,12 @@ def run_agent_turn(client, messages, on_event=print_event, approve_refund=None):
             })
         messages.append({"role": "user", "content": tool_results})
 
-    raise TurnFailed("الطلب ده أخد خطوات أكتر من المسموح. ممكن توضحلي طلبك تاني، أو أحولك لموظف؟")
+    raise TurnFailed(in_customer_language(
+        customer_text,
+        "This request took more steps than allowed. Could you rephrase it, "
+        "or would you like me to connect you with a person?",
+        "استغرق هذا الطلب خطوات أكثر من المسموح. هل يمكنك توضيح طلبك، "
+        "أم تفضل أن أحولك إلى أحد الموظفين؟"))
 
 
 # --- The chat loop -----------------------------------------------------------
@@ -236,7 +259,10 @@ def main():
             # Undo this turn so the conversation stays valid, then let the customer retry.
             del messages[turn_start:]
             print(f"\n  [api error] {exc}")
-            print("\nAgent: حصلت مشكلة في الاتصال، ممكن تبعت رسالتك تاني؟")
+            print("\nAgent: " + in_customer_language(
+                user_text,
+                "There was a connection problem. Could you send your message again?",
+                "حدثت مشكلة في الاتصال. هل يمكنك إرسال رسالتك مرة أخرى؟"))
             continue
         except TurnFailed as exc:
             del messages[turn_start:]
