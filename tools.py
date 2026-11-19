@@ -136,7 +136,7 @@ def cancel_order(customer_id, order_id):
         "success": True,
         "order_id": order_id,
         "new_status": "cancelled",
-        "note": "The order is cancelled. A refund is a separate step (refund_order).",
+        "note": "The order is cancelled. No refund was made yet; the customer can ask for one.",
     }
 
 
