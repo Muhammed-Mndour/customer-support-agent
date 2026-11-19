@@ -4,12 +4,13 @@ Run:  python -m uvicorn api:app --reload
 Docs: http://localhost:8000/docs
 """
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
 import anthropic
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 import agent  # importing it also loads .env (model, base URL, key)
@@ -68,6 +69,47 @@ class MessageReply(BaseModel):
     reply: str
 
 
+class HistoryMessage(BaseModel):
+    role: Literal["customer", "agent"]
+    text: str
+
+
+class ConversationHistory(BaseModel):
+    conversation_id: str
+    messages: list[HistoryMessage]
+
+
+# --- What the customer saw -----------------------------------------------------------
+
+CUSTOMER_TAG = "[customer_id: {}]\n"                      # added to each customer message
+CUSTOMER_TAG_PATTERN = re.compile(r"^\[customer_id: \d+\]\n")  # and removed for the history
+
+
+def _field(block, name):
+    """Blocks from the model are SDK objects; blocks the agent built itself are dicts."""
+    return block.get(name) if isinstance(block, dict) else getattr(block, name, None)
+
+
+def visible_messages(messages):
+    """Turn the agent's message list into what the customer and the agent said to each
+    other: drop tool calls, tool results and thinking, and the customer_id tag."""
+    visible = []
+    for message in messages:
+        content = message["content"]
+        if message["role"] == "user":
+            if isinstance(content, str):  # a customer message; tool results are lists
+                visible.append(HistoryMessage(role="customer",
+                                              text=CUSTOMER_TAG_PATTERN.sub("", content)))
+            continue
+        if any(_field(block, "type") == "tool_use" for block in content):
+            continue  # the agent asking for a tool, not talking to the customer
+        text = "\n".join(_field(block, "text") for block in content
+                         if _field(block, "type") == "text")
+        if text:
+            visible.append(HistoryMessage(role="agent", text=text))
+    return visible
+
+
 # --- Endpoints ---------------------------------------------------------------------
 
 @app.post(
@@ -96,7 +138,7 @@ def send_message(conversation_id: str, message: MessageIn):
     # Tell the model who is writing, so it doesn't have to ask for a phone number.
     # The caller can claim any customer_id for now; Block 2 takes it from the login token.
     messages.append({"role": "user",
-                     "content": f"[customer_id: {message.customer_id}]\n{message.text}"})
+                     "content": CUSTOMER_TAG.format(message.customer_id) + message.text})
 
     try:
         reply = agent.run_agent_turn(
@@ -116,3 +158,17 @@ def send_message(conversation_id: str, message: MessageIn):
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "The model is not available right now")
 
     return MessageReply(status="done", reply=reply)
+
+
+@app.get(
+    "/api/v1/conversations/{conversation_id}/messages",
+    response_model=ConversationHistory,
+)
+def get_messages(conversation_id: str, limit: int = Query(50, ge=1, le=200)):
+    conversation = conversations.get(conversation_id)
+    if conversation is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found")
+    return ConversationHistory(
+        conversation_id=conversation.id,
+        messages=visible_messages(conversation.messages)[-limit:],  # the latest ones
+    )
