@@ -1,3 +1,5 @@
 anthropic>=2.6.0
 python-dotenv>=1.2.4
 streamlit>=1.67.0  # only for the web page (app.py)
+fastapi>=0.165.0   # the HTTP API (api.py)
+uvicorn>=0.54.0    # runs the API server
