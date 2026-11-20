@@ -140,12 +140,15 @@ def cancel_order(customer_id, order_id):
     }
 
 
-def refund_order(customer_id, order_id, approve_refund=None):
+def refund_order(customer_id, order_id, approve_refund=None, request_approval=None):
     """Refund an order. Refunds above REFUND_APPROVAL_LIMIT need a human.
 
-    approve_refund(details) -> True/False is how that human answers. The agent
-    loop passes it in (a y/n question in the terminal, buttons on the web page);
-    the model never can, so it has no way to approve its own refund.
+    The code running the agent loop says how that human is reached; the model never
+    can, so it has no way to approve its own refund:
+    - approve_refund(details) -> True/False asks now and waits for the answer
+      (a y/n question in the terminal, buttons on the web page).
+    - request_approval(details) -> approval id records the request for later and
+      returns at once (the HTTP API: a supervisor decides in another request).
     """
     connection = get_connection()
     order = _find_order(connection, customer_id, order_id)
@@ -169,8 +172,25 @@ def refund_order(customer_id, order_id, approve_refund=None):
 
     needs_approval = order["amount"] > REFUND_APPROVAL_LIMIT
     if needs_approval:
+        details = {
+            "order_id": order_id,
+            "customer": customer["name"],
+            "item": order["item"],
+            "amount_egp": order["amount"],
+        }
         # Every refund result starts with "refunded": true/false. A plain boolean is
         # much harder for a small model to misread than a sentence about refunds.
+        if request_approval is not None:
+            approval_id = request_approval(details)
+            return {
+                "refunded": False,
+                "status": "pending_approval",
+                "order_id": order_id,
+                "amount_egp": order["amount"],
+                "approval_id": approval_id,
+                "message": "No money was refunded yet. The refund was sent to a supervisor "
+                           "for approval; the customer will be told when they decide.",
+            }
         if approve_refund is None:
             return {
                 "refunded": False,
@@ -180,12 +200,7 @@ def refund_order(customer_id, order_id, approve_refund=None):
                 "message": f"No money was refunded. Refunds above {REFUND_APPROVAL_LIMIT} EGP "
                            "need a supervisor, and none is available right now.",
             }
-        approved = approve_refund({
-            "order_id": order_id,
-            "customer": customer["name"],
-            "item": order["item"],
-            "amount_egp": order["amount"],
-        })
+        approved = approve_refund(details)
         if not approved:
             return {
                 "refunded": False,
@@ -299,9 +314,9 @@ TOOLS = [
         "name": "refund_order",
         "description": "Refund a delivered or cancelled order. Only call this when the "
                        "customer clearly asks for their money back for a specific order. "
-                       f"Refunds above {REFUND_APPROVAL_LIMIT} EGP are checked by a "
-                       "supervisor during the call; the result says whether the refund "
-                       "was actually made.",
+                       f"Refunds above {REFUND_APPROVAL_LIMIT} EGP need a supervisor: "
+                       "the result says whether the refund was made, rejected, or sent "
+                       "to a supervisor and still waiting.",
         "strict": True,
         "input_schema": {
             "type": "object",
@@ -338,18 +353,19 @@ TOOL_FUNCTIONS = {
 }
 
 
-def run_tool(name, tool_input, approve_refund=None):
+def run_tool(name, tool_input, approve_refund=None, request_approval=None):
     """Run a tool by name with the arguments the model chose. Used by the agent loop.
 
-    approve_refund comes from the code running the loop, not from the model, and
-    only refund_order receives it.
+    approve_refund and request_approval come from the code running the loop, not
+    from the model, and only refund_order receives them.
     """
     function = TOOL_FUNCTIONS.get(name)
     if function is None:
         return {"error": f"Unknown tool: {name}"}
     try:
         if name == "refund_order":
-            return function(**tool_input, approve_refund=approve_refund)
+            return function(**tool_input, approve_refund=approve_refund,
+                            request_approval=request_approval)
         return function(**tool_input)
     except Exception as exc:  # a bug in a tool must not crash the whole conversation
         return {"error": f"The tool failed: {exc}"}
