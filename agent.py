@@ -36,19 +36,25 @@ Today's date is {date.today().isoformat()}.
 How you talk:
 - Reply in the language the customer writes in: English to English, Arabic to Arabic.
   If they switch language, switch with them. Be friendly, polite, short and clear.
+- Speak like a support person, not a system: never mention tool names, JSON fields
+  or other internal details. Say "I can refund it for you", not "use refund_order".
 - Write product names, order numbers and dates the way the tools return them.
 
 How you work:
 - Only state facts that came from a tool result in this conversation. If the tools
   don't have the answer, say you don't know and offer to open a ticket for a human.
   Never guess order details, dates, prices or policies.
-- To identify a customer, ask for their phone number and use get_customer_by_phone.
+- If a message starts with [customer_id: N], the customer is already identified: use
+  that customer_id with the tools, and never ask them for a phone number.
+  Otherwise, ask for their phone number and use get_customer_by_phone.
 - If it is unclear which order the customer means, list their orders and ask.
 - Only cancel or refund when the customer clearly asks for it.
 - If a tool returns an error, explain it to the customer in simple words.
-- Refunds above {REFUND_APPROVAL_LIMIT} EGP are checked by a supervisor while the customer waits. Tell
-  the customer exactly what the refund_order result says: made, rejected by the
-  supervisor, or not possible right now. Never promise a refund the result didn't make.
+- Refunds above {REFUND_APPROVAL_LIMIT} EGP need a supervisor. Tell the customer exactly
+  what the refund result says: made, rejected by the supervisor, sent to a supervisor
+  and still waiting, or not possible right now. Never promise a refund that wasn't made.
+- A message starting with [supervisor decision ...] comes from the system, not the
+  customer: tell the customer the outcome it describes, in their language.
 - Use escalate_to_human when the customer asks for a person, is very upset, or has
   a problem the tools can't solve."""
 
@@ -133,12 +139,15 @@ def clean_content(content):
 
 # --- The agent loop ----------------------------------------------------------
 
-def run_agent_turn(client, messages, on_event=print_event, approve_refund=None):
+def run_agent_turn(client, messages, on_event=print_event, approve_refund=None,
+                   request_approval=None):
     """Handle one customer message. Returns the final answer, or raises TurnFailed.
 
     on_event(kind, data) is called for every step, so any interface can show it.
-    approve_refund(details) -> True/False asks a human about big refunds; with
-    None, there is no supervisor and big refunds are refused.
+    Big refunds need a human; the caller says how to reach one:
+    - approve_refund(details) -> True/False asks now and waits (terminal, web page);
+    - request_approval(details) -> approval id records it for later (HTTP API);
+    - neither: there is no supervisor and big refunds are refused.
     """
     def ask_supervisor(details):
         on_event("approval_request", details)
@@ -206,7 +215,8 @@ def run_agent_turn(client, messages, on_event=print_event, approve_refund=None):
         for block in response.content:
             if block.type != "tool_use":
                 continue
-            result = run_tool(block.name, block.input, approve_refund=supervisor)
+            result = run_tool(block.name, block.input, approve_refund=supervisor,
+                              request_approval=request_approval)
             on_event("tool_result", result)
             tool_results.append({
                 "type": "tool_result",

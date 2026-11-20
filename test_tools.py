@@ -24,7 +24,7 @@ results = []
 def outcome(result):
     if "error" in result:
         return "error"
-    if result.get("status") in ("approval_required", "rejected"):
+    if result.get("status") in ("approval_required", "rejected", "pending_approval"):
         return result["status"]
     return "ok"
 
@@ -99,6 +99,15 @@ check("Refund cancelled order 1009 (350 EGP) with a supervisor on hand",
       refund_order(3, 1009, approve_refund=small), "ok")
 check("  ...and nobody was asked, because it is under the limit",
       {"error": "supervisor was asked"} if small.asked else {}, "ok")
+recorded = []
+check("Refund 1003 (1800 EGP) with request_approval: recorded, not refunded",
+      refund_order(4, 1003, request_approval=lambda details: recorded.append(details) or "ap_test"),
+      "pending_approval")
+check("  ...the request was recorded once, with the right details",
+      {} if recorded == [{"order_id": 1003, "customer": "Yasmin Khaled",
+                          "item": "Coffee Maker", "amount_egp": 1800}] else {"error": "wrong"}, "ok")
+order_1003 = next(o for o in get_orders_for_customer(4)["orders"] if o["order_id"] == 1003)
+check("  ...and no money moved yet", {"error": "refunded"} if order_1003["refunded"] else {}, "ok")
 check("Refund delayed order 1006 (not cancelled yet)", refund_order(4, 1006), "error")
 check("Refund shipped order 1008", refund_order(5, 1008), "error")
 
