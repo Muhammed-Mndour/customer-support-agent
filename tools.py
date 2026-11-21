@@ -332,7 +332,8 @@ TOOLS = [
                        "problem caused by a product, asks for compensation beyond refunding "
                        "the amount they paid, or has any other problem none of the other "
                        "tools can solve. A broken or wrong item alone is not a reason: offer "
-                       "a refund first. Only a ticket from this tool reaches a human: "
+                       "a refund first. Never for questions unrelated to the store or the "
+                       "customer's orders. Only a ticket from this tool reaches a human: "
                        "telling the customer you will connect them does nothing by itself.",
         "strict": True,
         "input_schema": {
