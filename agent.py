@@ -14,9 +14,9 @@ import re
 import sys
 from datetime import date
 
-import anthropic
 from dotenv import load_dotenv
 
+from providers import AUTH_ERRORS, MODEL_ERRORS, make_client
 from tools import REFUND_APPROVAL_LIMIT, TOOLS, run_tool
 
 # Read .env into the environment. override=True makes .env win over variables the
@@ -240,11 +240,11 @@ def main():
     for stream in (sys.stdin, sys.stdout):
         stream.reconfigure(encoding="utf-8")  # Arabic in the Windows console
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("MODEL_PROVIDER") == "openai"):
         print("ANTHROPIC_API_KEY is not set. Copy .env.example to .env and put your key there.")
         sys.exit(1)
 
-    client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
+    client = make_client()          # Claude, Ollama or Gemini, from .env
     messages = []                   # the whole conversation, sent on every request
 
     print(f"Customer support agent ({MODEL}). Type 'exit' to quit.")
@@ -262,10 +262,10 @@ def main():
         messages.append({"role": "user", "content": user_text})
         try:
             answer = run_agent_turn(client, messages, approve_refund=ask_in_terminal)
-        except anthropic.AuthenticationError:
-            print("The API key was rejected. Check ANTHROPIC_API_KEY in .env.")
+        except AUTH_ERRORS:
+            print("The API key was rejected. Check the key in .env.")
             break
-        except (anthropic.APIStatusError, anthropic.APIConnectionError) as exc:
+        except MODEL_ERRORS as exc:
             # Undo this turn so the conversation stays valid, then let the customer retry.
             del messages[turn_start:]
             print(f"\n  [api error] {exc}")

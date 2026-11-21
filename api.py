@@ -9,17 +9,17 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
-import anthropic
 from fastapi import FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 import agent  # importing it also loads .env (model, base URL, key)
 import tools
+from providers import MODEL_ERRORS, make_client
 
 app = FastAPI(title="Customer Support Agent API")
 
 # One connection to the model for the whole app, like the repositories below.
-model_client = anthropic.Anthropic()
+model_client = make_client()  # Claude, Ollama or Gemini, from .env
 
 
 # --- Storage ---------------------------------------------------------------------
@@ -176,7 +176,7 @@ def run_agent(messages, request_approval=None):
         # message for the customer.
         del messages[turn_start:]
         return "failed", str(exc)
-    except (anthropic.APIStatusError, anthropic.APIConnectionError):
+    except MODEL_ERRORS:
         del messages[turn_start:]
         return "unavailable", None
 
