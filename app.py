@@ -16,10 +16,10 @@ import json
 import threading
 import time
 
-import anthropic
 import streamlit as st
 
 import agent
+from providers import AUTH_ERRORS, MODEL_ERRORS, make_client
 from db import create_database
 from tools import REFUND_APPROVAL_LIMIT
 
@@ -28,7 +28,7 @@ st.set_page_config(page_title="Support agent")
 
 @st.cache_resource
 def get_client():
-    return anthropic.Anthropic()  # same settings as agent.py, read from .env
+    return make_client()  # same settings as agent.py, read from .env
 
 
 def rtl(text):
@@ -74,10 +74,10 @@ def run_job(job, client, messages):
             on_event=lambda kind, data: job.events.append((kind, data)),
             approve_refund=job.approve_refund,
         )
-    except anthropic.AuthenticationError:
+    except AUTH_ERRORS:
         del messages[turn_start:]
-        job.answer = "The API key was rejected. Check ANTHROPIC_API_KEY in .env."
-    except (anthropic.APIStatusError, anthropic.APIConnectionError) as exc:
+        job.answer = "The API key was rejected. Check the key in .env."
+    except MODEL_ERRORS as exc:
         # Undo this turn so the conversation stays valid, then let the customer retry.
         del messages[turn_start:]
         job.error = str(exc)
