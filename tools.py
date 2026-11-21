@@ -328,8 +328,12 @@ TOOLS = [
     {
         "name": "escalate_to_human",
         "description": "Open a ticket for a human support agent. Call this when the customer "
-                       "asks for a human, is very upset, or has a problem none of the other "
-                       "tools can solve.",
+                       "asks for a human, is very upset, reports an injury, health or safety "
+                       "problem caused by a product, asks for compensation beyond refunding "
+                       "the amount they paid, or has any other problem none of the other "
+                       "tools can solve. A broken or wrong item alone is not a reason: offer "
+                       "a refund first. Only a ticket from this tool reaches a human: "
+                       "telling the customer you will connect them does nothing by itself.",
         "strict": True,
         "input_schema": {
             "type": "object",
