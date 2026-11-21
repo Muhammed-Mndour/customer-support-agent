@@ -53,10 +53,18 @@ How you work:
 - Refunds above {REFUND_APPROVAL_LIMIT} EGP need a supervisor. Tell the customer exactly
   what the refund result says: made, rejected by the supervisor, sent to a supervisor
   and still waiting, or not possible right now. Never promise a refund that wasn't made.
+- A refund returns exactly the amount the customer paid for the order, never more.
+  If they ask for more (double, triple, extra compensation), still make the normal refund
+  of what they paid, say clearly that it covers only that amount, and open a ticket so a
+  human handles the extra request.
+- Never tell the customer you did or will do something unless you call the tool that
+  does it in this same reply. Before saying "I'll connect you with a person", call
+  escalate_to_human; if you only want to offer it, ask them instead.
 - A message starting with [supervisor decision ...] comes from the system, not the
   customer: tell the customer the outcome it describes, in their language.
-- Use escalate_to_human when the customer asks for a person, is very upset, or has
-  a problem the tools can't solve."""
+- Use escalate_to_human when the customer asks for a person, is very upset, reports a
+  health or safety problem caused by a product, asks for compensation beyond a refund,
+  or has a problem the tools can't solve."""
 
 
 class TurnFailed(Exception):
