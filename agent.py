@@ -14,9 +14,9 @@ import re
 import sys
 from datetime import date
 
-import anthropic
 from dotenv import load_dotenv
 
+from providers import AUTH_ERRORS, MODEL_ERRORS, make_client
 from tools import REFUND_APPROVAL_LIMIT, TOOLS, run_tool
 
 # Read .env into the environment. override=True makes .env win over variables the
@@ -40,6 +40,12 @@ How you talk:
   or other internal details. Say "I can refund it for you", not "use refund_order".
 - Write product names, order numbers and dates the way the tools return them.
 
+What you help with:
+- Only this store's orders: status, delivery, cancellations and refunds. If the customer
+  asks about anything else (programming, homework, general knowledge, other companies),
+  politely say you can only help with their orders here and ask if they need help with
+  one. Do not answer it, and do not open a ticket for it.
+
 How you work:
 - Only state facts that came from a tool result in this conversation. If the tools
   don't have the answer, say you don't know and offer to open a ticket for a human.
@@ -53,10 +59,18 @@ How you work:
 - Refunds above {REFUND_APPROVAL_LIMIT} EGP need a supervisor. Tell the customer exactly
   what the refund result says: made, rejected by the supervisor, sent to a supervisor
   and still waiting, or not possible right now. Never promise a refund that wasn't made.
+- A refund returns exactly the amount the customer paid for the order, never more.
+  If they ask for more (double, triple, extra compensation), still make the normal refund
+  of what they paid, say clearly that it covers only that amount, and open a ticket so a
+  human handles the extra request.
+- Never tell the customer you did or will do something unless you call the tool that
+  does it in this same reply. Before saying "I'll connect you with a person", call
+  escalate_to_human; if you only want to offer it, ask them instead.
 - A message starting with [supervisor decision ...] comes from the system, not the
   customer: tell the customer the outcome it describes, in their language.
-- Use escalate_to_human when the customer asks for a person, is very upset, or has
-  a problem the tools can't solve."""
+- Use escalate_to_human when the customer asks for a person, is very upset, reports a
+  health or safety problem caused by a product, asks for compensation beyond a refund,
+  or has a problem the tools can't solve."""
 
 
 class TurnFailed(Exception):
@@ -240,11 +254,11 @@ def main():
     for stream in (sys.stdin, sys.stdout):
         stream.reconfigure(encoding="utf-8")  # Arabic in the Windows console
 
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("MODEL_PROVIDER") == "openai"):
         print("ANTHROPIC_API_KEY is not set. Copy .env.example to .env and put your key there.")
         sys.exit(1)
 
-    client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from the environment
+    client = make_client()          # Claude, Ollama or Gemini, from .env
     messages = []                   # the whole conversation, sent on every request
 
     print(f"Customer support agent ({MODEL}). Type 'exit' to quit.")
@@ -262,10 +276,10 @@ def main():
         messages.append({"role": "user", "content": user_text})
         try:
             answer = run_agent_turn(client, messages, approve_refund=ask_in_terminal)
-        except anthropic.AuthenticationError:
-            print("The API key was rejected. Check ANTHROPIC_API_KEY in .env.")
+        except AUTH_ERRORS:
+            print("The API key was rejected. Check the key in .env.")
             break
-        except (anthropic.APIStatusError, anthropic.APIConnectionError) as exc:
+        except MODEL_ERRORS as exc:
             # Undo this turn so the conversation stays valid, then let the customer retry.
             del messages[turn_start:]
             print(f"\n  [api error] {exc}")
