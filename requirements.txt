@@ -1,5 +1,8 @@
 anthropic>=2.6.0
+openai>=3.57.0     # Gemini and other OpenAI-compatible models (providers.py)
 python-dotenv>=1.2.4
+pwdlib[argon2]>=0.4.2  # password hashing (auth.py)
+PyJWT>=2.15.1      # login tokens (auth.py)
 streamlit>=1.67.0  # only for the web page (app.py)
 fastapi>=0.165.0   # the HTTP API (api.py)
 uvicorn>=0.54.0    # runs the API server
