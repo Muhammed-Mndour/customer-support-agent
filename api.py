@@ -1,4 +1,4 @@
-"""HTTP API for the support agent (Block 1).
+"""HTTP API for the support agent (Block 1, login from Block 2).
 
 Run:  python -m uvicorn api:app --reload
 Docs: http://localhost:8000/docs
@@ -10,10 +10,12 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 import agent  # importing it also loads .env (model, base URL, key)
+import auth
 import tools
+from db import get_connection
 from providers import MODEL_ERRORS, make_client
 
 app = FastAPI(title="Customer Support Agent API")
@@ -82,12 +84,51 @@ class ApprovalRepository:
         self._approvals.pop(approval_id, None)
 
 
+@dataclass
+class User:
+    """Someone who can log in: a store customer, or the supervisor (customer_id None)."""
+    id: int
+    email: str
+    password_hash: str
+    role: Literal["customer", "supervisor"]
+    customer_id: int | None
+
+
+class UserRepository:
+    """Reads accounts from the users table in store.db (built by db.py).
+
+    Like the other repositories, the endpoints only talk to this class, so Block 3 can
+    move users to Postgres by changing this class alone.
+    """
+
+    def get_by_email(self, email):
+        """Return the user, or None if no account has this email (any letter case)."""
+        connection = get_connection()
+        row = connection.execute(
+            "SELECT id, email, password_hash, role, customer_id FROM users WHERE email = ?",
+            (email.strip(),),  # the column is COLLATE NOCASE, so case doesn't matter
+        ).fetchone()
+        connection.close()
+        return User(**row) if row else None
+
+
 # One of each for the whole app: every request must see the same data.
 conversations = ConversationRepository()
 approvals = ApprovalRepository()
+users = UserRepository()
 
 
 # --- Request and response models -------------------------------------------------
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=1)
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"  # send it as "Authorization: Bearer <token>"
+
 
 class ConversationCreated(BaseModel):
     id: str
@@ -182,6 +223,23 @@ def run_agent(messages, request_approval=None):
 
 
 # --- Endpoints ---------------------------------------------------------------------
+
+LOGIN_FAILED = "Invalid email or password"  # one message for every failure
+
+
+@app.post("/api/v1/auth/login", response_model=TokenOut)
+def login(credentials: LoginIn):
+    """Check the email and password once, and hand back a token for the next requests."""
+    user = users.get_by_email(credentials.email)
+    # Always run the (slow, on purpose) password check, even for an unknown email, so
+    # the reply takes the same time and doesn't reveal which emails have an account.
+    password_hash = user.password_hash if user else auth.DUMMY_PASSWORD_HASH
+    password_ok = auth.verify_password(credentials.password, password_hash)
+    if user is None or not password_ok:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, LOGIN_FAILED,
+                            headers={"WWW-Authenticate": "Bearer"})
+    return TokenOut(access_token=auth.create_access_token(user.id, user.role))
+
 
 @app.post(
     "/api/v1/conversations",

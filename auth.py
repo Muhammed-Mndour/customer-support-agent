@@ -39,6 +39,11 @@ def verify_password(password, password_hash):
     return _password_hasher.verify(password, password_hash)
 
 
+# Checked at login when the email doesn't exist, so that case takes as long as a wrong
+# password. Without it, a fast reply would tell an attacker the email isn't registered.
+DUMMY_PASSWORD_HASH = hash_password("not-a-real-password")
+
+
 # --- Tokens -------------------------------------------------------------------------
 JWT_ALGORITHM = "HS256"        # signed and checked with the same secret
 ACCESS_TOKEN_MINUTES = 30      # after this the customer has to log in again
