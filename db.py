@@ -7,6 +7,7 @@ from pathlib import Path
 DB_PATH = Path(__file__).parent / "store.db"
 
 SCHEMA = """
+DROP TABLE IF EXISTS users;
 DROP TABLE IF EXISTS tickets;
 DROP TABLE IF EXISTS orders;
 DROP TABLE IF EXISTS customers;
@@ -35,6 +36,19 @@ CREATE TABLE tickets (
     reason      TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
+
+-- Who can log in. Kept apart from customers: a customer is someone who bought,
+-- a user is someone with a password. A supervisor is a user but not a customer.
+CREATE TABLE users (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    email         TEXT NOT NULL UNIQUE COLLATE NOCASE,  -- Mona@x.com = mona@x.com
+    password_hash TEXT NOT NULL,                        -- never the password itself
+    role          TEXT NOT NULL CHECK (role IN ('customer', 'supervisor')),
+    customer_id   INTEGER UNIQUE REFERENCES customers(id),  -- one account per customer
+    created_at    TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+    -- a customer account must point to a customer; a supervisor account must not
+    CHECK ((role = 'customer') = (customer_id IS NOT NULL))
+);
 """
 
 CUSTOMERS = [
@@ -43,6 +57,28 @@ CUSTOMERS = [
     (3, "Mahmoud Saeed", "01123456789"),
     (4, "Yasmin Khaled", "01234567890"),
     (5, "Karim Mostafa", "01555123456"),
+]
+
+# (email, password_hash, role, customer_id): one login for each store customer above.
+# Every password is the test password 12345678, stored only as an argon2 hash (pwdlib).
+# The hashes differ because each has its own random salt.
+# The supervisor isn't here: it's staff, and its email and password come from .env.
+USERS = [
+    ("mohamed@example.com",
+     "$argon2id$v=19$m=65536,t=3,p=4$vAx1gScYUI/OWEt6e9lGEA$uSRrY4H/cl22rb3oZpb5xnT04/W0f//rwyuMD9AjZ24",
+     "customer", 1),
+    ("mona@example.com",
+     "$argon2id$v=19$m=65536,t=3,p=4$IZDkidieLv1kO/nYEv8Dww$1iUvR3rzoxIOmQrQZYEMDcIwNAUNIWzZUQQ0/TGXAXE",
+     "customer", 2),
+    ("mahmoud@example.com",
+     "$argon2id$v=19$m=65536,t=3,p=4$m5i3Y5QPhVRFDWLwxIYiew$bcckJeGn/ubUQQTOrUsRjrhQdx0AM7SNtw252E50Gfk",
+     "customer", 3),
+    ("yasmin@example.com",
+     "$argon2id$v=19$m=65536,t=3,p=4$sSHytlMeMRMenQxMVvJOAA$7Omv7cpqDpDCGbw+9HJKh2CHe4IuI87+neNGTAI7Mn4",
+     "customer", 4),
+    ("karim@example.com",
+     "$argon2id$v=19$m=65536,t=3,p=4$a41u6vLOQnMiHnD/9fLoMg$MX9Xw6s0Un2HlIlUTwROFLDz+HlOIzH7dIpfeW/W140",
+     "customer", 5),
 ]
 
 # (id, customer_id, item, amount, status, days_ago_ordered, days_until_delivery)
@@ -75,6 +111,18 @@ def create_database():
     with get_connection() as connection:
         connection.executescript(SCHEMA)
         connection.executemany("INSERT INTO customers VALUES (?, ?, ?)", CUSTOMERS)
+        connection.executemany(
+            "INSERT INTO users (email, password_hash, role, customer_id) VALUES (?, ?, ?, ?)",
+            USERS,
+        )
+        # The supervisor's email and password live only in .env, never in the code.
+        # Imported here, not at the top, so code that only reads the store (tools.py)
+        # doesn't need the auth settings.
+        from auth import SUPERVISOR_EMAIL, SUPERVISOR_PASSWORD, hash_password
+        connection.execute(
+            "INSERT INTO users (email, password_hash, role) VALUES (?, ?, 'supervisor')",
+            (SUPERVISOR_EMAIL.lower(), hash_password(SUPERVISOR_PASSWORD)),
+        )
         for order_id, customer_id, item, amount, status, days_ago, days_until in ORDERS:
             order_date = today - timedelta(days=days_ago)
             expected = None if days_until is None else today + timedelta(days=days_until)
@@ -116,3 +164,4 @@ if __name__ == "__main__":
         " FROM orders o JOIN customers c ON c.id = o.customer_id ORDER BY o.id",
     )
     print_table("tickets", "SELECT * FROM tickets")
+    print_table("users", "SELECT id, email, role, customer_id FROM users")
