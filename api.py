@@ -163,6 +163,14 @@ def get_current_user(credentials: HTTPAuthorizationCredentials | None = Depends(
     return user
 
 
+def require_supervisor(user: User = Depends(get_current_user)):
+    """For supervisor-only endpoints. Runs get_current_user first, so:
+    no or bad token -> 401 (who are you?); a customer -> 403 (we know you, but no)."""
+    if user.role != "supervisor":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only a supervisor can do this")
+    return user
+
+
 # --- Request and response models -------------------------------------------------
 
 class LoginIn(BaseModel):
@@ -371,7 +379,9 @@ def get_messages(conversation_id: str, limit: int = Query(50, ge=1, le=200)):
     "/api/v1/conversations/{conversation_id}/approvals/{approval_id}",
     response_model=MessageReply,
 )
-def decide_approval(conversation_id: str, approval_id: str, body: DecisionIn):
+def decide_approval(conversation_id: str, approval_id: str, body: DecisionIn,
+                    supervisor: User = Depends(require_supervisor)):
+    # Only a supervisor gets here, for any customer's conversation (no ownership check).
     conversation = conversations.get(conversation_id)
     approval = approvals.get(approval_id)
     if conversation is None or approval is None or approval.conversation_id != conversation_id:
