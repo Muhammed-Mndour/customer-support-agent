@@ -154,7 +154,7 @@ def clean_content(content):
 # --- The agent loop ----------------------------------------------------------
 
 def run_agent_turn(client, messages, on_event=print_event, approve_refund=None,
-                   request_approval=None):
+                   request_approval=None, customer_id=None):
     """Handle one customer message. Returns the final answer, or raises TurnFailed.
 
     on_event(kind, data) is called for every step, so any interface can show it.
@@ -162,6 +162,8 @@ def run_agent_turn(client, messages, on_event=print_event, approve_refund=None,
     - approve_refund(details) -> True/False asks now and waits (terminal, web page);
     - request_approval(details) -> approval id records it for later (HTTP API);
     - neither: there is no supervisor and big refunds are refused.
+    customer_id: the logged-in customer (HTTP API). Every tool call then uses it,
+    whatever the model writes (see tools.run_tool).
     """
     def ask_supervisor(details):
         on_event("approval_request", details)
@@ -230,7 +232,7 @@ def run_agent_turn(client, messages, on_event=print_event, approve_refund=None,
             if block.type != "tool_use":
                 continue
             result = run_tool(block.name, block.input, approve_refund=supervisor,
-                              request_approval=request_approval)
+                              request_approval=request_approval, customer_id=customer_id)
             on_event("tool_result", result)
             tool_results.append({
                 "type": "tool_result",

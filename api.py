@@ -271,9 +271,12 @@ def visible_messages(messages):
     return visible
 
 
-def run_agent(messages, request_approval=None):
+def run_agent(messages, customer_id, request_approval=None):
     """Run the agent on a conversation. On failure, undo what this turn added, so the
-    conversation stays valid. Returns (status, reply)."""
+    conversation stays valid. Returns (status, reply).
+
+    customer_id is the conversation's owner: every tool call is forced to use it, so
+    the model can't be talked into another customer's orders."""
     turn_start = len(messages) - 1  # the last message is the one that started this turn
     try:
         reply = agent.run_agent_turn(
@@ -281,6 +284,7 @@ def run_agent(messages, request_approval=None):
             messages,
             on_event=lambda kind, data: None,  # nobody watches the steps live
             request_approval=request_approval,
+            customer_id=customer_id,
         )
         return "done", reply
     except agent.TurnFailed as exc:
@@ -356,7 +360,7 @@ def send_message(conversation_id: str, message: MessageIn,
     # The id is the conversation's owner, which came from the login token.
     conversation.messages.append({"role": "user",
                                   "content": CUSTOMER_TAG.format(conversation.customer_id) + message.text})
-    result, reply = run_agent(conversation.messages, request_approval)
+    result, reply = run_agent(conversation.messages, conversation.customer_id, request_approval)
 
     if result != "done":
         for approval in created:  # the turn was undone, so its requests go too
@@ -427,7 +431,7 @@ def decide_approval(conversation_id: str, approval_id: str, body: DecisionIn,
     # The decision goes into the conversation as a note, then the agent tells the customer.
     note = DECISION_NOTE.format(approval.id, outcome)
     conversation.messages.append({"role": "user", "content": note})
-    result, reply = run_agent(conversation.messages)
+    result, reply = run_agent(conversation.messages, conversation.customer_id)
 
     if result != "done":
         # The decision stands even if the agent can't write about it: keep the note so the
