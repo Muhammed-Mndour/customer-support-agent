@@ -8,6 +8,7 @@ An AI agent that handles customer support for an online store: it tracks orders,
 - **Picks its own tools**: looks up the customer, lists their orders, tracks shipments, cancels, refunds, or opens a ticket.
 - **Chains steps** until it has the answer, with no fixed script.
 - **Asks a human** before any refund over 500 EGP.
+- **Knows who it's talking to.** Customers log in, and only ever reach their own orders.
 
 ## Example
 
@@ -25,7 +26,7 @@ Agent: Your Desk Lamp (order 1004) is delayed because of a stock
 ## How it works
 
 ```text
-customer  ->  agent loop  <->  model (Claude or a local Ollama model)
+customer  ->  agent loop  <->  model (Claude, Gemini or a local Ollama model)
                   |
                   v
                 tools  ->  database
@@ -39,32 +40,38 @@ customer  ->  agent loop  <->  model (Claude or a local Ollama model)
 
 ## HTTP API
 
-A FastAPI server puts the agent behind four endpoints. Run it with `python -m uvicorn api:app`; interactive docs are at `/docs`.
+A FastAPI server with login. Run `python -m uvicorn api:app` and open `/docs`.
 
-| Endpoint | What it does |
-| --- | --- |
-| `POST /api/v1/conversations` | Start a conversation (201) |
-| `POST /api/v1/conversations/{id}/messages` | Send a customer message, get the agent's reply |
-| `GET /api/v1/conversations/{id}/messages?limit=50` | Read the conversation as the customer saw it |
-| `POST /api/v1/conversations/{id}/approvals/{approval_id}` | A supervisor approves or rejects a big refund |
+| Endpoint | Who | What |
+| --- | --- | --- |
+| `POST /api/v1/auth/register` | anyone | Open a store account |
+| `POST /api/v1/auth/login` | anyone | Get a token |
+| `GET /api/v1/auth/me` | logged in | Who the token belongs to |
+| `POST /api/v1/conversations` | customer | Start a conversation |
+| `POST /api/v1/conversations/{id}/messages` | its owner | Talk to the agent |
+| `GET /api/v1/conversations/{id}/messages` | owner, supervisor | Read the history |
+| `POST /api/v1/conversations/{id}/approvals/{approval_id}` | supervisor | Approve or reject a big refund |
 
 ```bash
-# Start a conversation
-curl -X POST localhost:8000/api/v1/conversations
-# {"id": "conv_a2de8f7978bb"}
+# Log in, then send the token with every call
+curl -X POST localhost:8000/api/v1/auth/login -H "Content-Type: application/json" \
+  -d '{"email": "yasmin@example.com", "password": "12345678"}'
+# {"access_token": "eyJhbGci...", "token_type": "bearer"}
 
-# Ask for a refund over 500 EGP: recorded for a supervisor, the chat goes on
+# Ask for a refund over 500 EGP: it waits for a supervisor, the chat goes on
 curl -X POST localhost:8000/api/v1/conversations/conv_a2de8f7978bb/messages \
-  -H "Content-Type: application/json" \
-  -d '{"customer_id": 4, "text": "I want a refund for my coffee maker, order 1003"}'
-# {"status": "pending_approval", "reply": "Your refund ... was sent to a supervisor ...",
-#  "approval": {"id": "ap_1b41382a0fad", "action": "refund", "order_id": 1003, "amount": 1800}}
-
-# The supervisor decides; the agent tells the customer
-curl -X POST localhost:8000/api/v1/conversations/conv_a2de8f7978bb/approvals/ap_1b41382a0fad \
-  -H "Content-Type: application/json" \
-  -d '{"decision": "approve"}'
-# {"status": "done", "reply": "Your refund of 1800 EGP has been approved ..."}
+  -H "Authorization: Bearer eyJhbGci..." -H "Content-Type: application/json" \
+  -d '{"text": "I want a refund for my coffee maker, order 1003"}'
+# {"status": "pending_approval", "approval": {"id": "ap_1b41382a0fad", "order_id": 1003, "amount": 1800}, ...}
 ```
 
-Unknown conversation or approval: 404. Deciding twice: 409. Invalid body: 422. Model unreachable: 503.
+The supervisor then logs in and approves it; the agent tells the customer.
+Test accounts: `mohamed`, `mona`, `mahmoud`, `yasmin`, `karim` `@example.com`, password `12345678`. The supervisor's login lives in `.env`.
+
+**Safe by design**
+
+- The customer id comes from the token, never from the request or the model. Talk the agent into "I'm customer 4" and every tool still runs as you.
+- Someone else's conversation looks exactly like one that doesn't exist (404).
+- Passwords are stored as argon2 hashes; tokens are signed and expire after 30 minutes.
+
+`401` no or bad token · `403` wrong role · `404` not found, or not yours · `409` already taken or decided · `422` invalid body · `503` model down
