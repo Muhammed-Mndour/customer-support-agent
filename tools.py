@@ -12,8 +12,9 @@ from db import get_connection
 REFUND_APPROVAL_LIMIT = 500  # refunds above this amount (EGP) need a human
 
 
-def _normalize_phone(phone):
-    """Accept '010 1234 5678', '+201012345678', etc. and return '01012345678'."""
+def normalize_phone(phone):
+    """Accept '010 1234 5678', '+201012345678', etc. and return '01012345678'.
+    Also used by the API's register, so a phone is stored the way the tools look it up."""
     digits = re.sub(r"\D", "", phone)
     if digits.startswith("20") and len(digits) == 12:
         digits = "0" + digits[2:]
@@ -41,7 +42,7 @@ def get_customer_by_phone(phone):
     connection = get_connection()
     row = connection.execute(
         "SELECT id, name, phone FROM customers WHERE phone = ?",
-        (_normalize_phone(phone),),
+        (normalize_phone(phone),),
     ).fetchone()
     connection.close()
     if row is None:
@@ -358,15 +359,27 @@ TOOL_FUNCTIONS = {
 }
 
 
-def run_tool(name, tool_input, approve_refund=None, request_approval=None):
+def run_tool(name, tool_input, approve_refund=None, request_approval=None, customer_id=None):
     """Run a tool by name with the arguments the model chose. Used by the agent loop.
 
     approve_refund and request_approval come from the code running the loop, not
     from the model, and only refund_order receives them.
+
+    customer_id also comes from the code, when it already knows who the customer is
+    (the HTTP API, from the login token). Then the model can't choose it: whatever
+    customer_id the model wrote is replaced, so a customer who talks the model into
+    "I'm customer 4" still only reaches their own orders. And the phone lookup is
+    refused, since it would only reveal other customers. Without customer_id (terminal,
+    web page) the customer is found by phone and the model's choice is used, as before.
     """
     function = TOOL_FUNCTIONS.get(name)
     if function is None:
         return {"error": f"Unknown tool: {name}"}
+    if customer_id is not None:
+        if name == "get_customer_by_phone":
+            return {"error": "The customer is already identified. Use their own customer_id."}
+        # A new dict: the model's own request stays as it wrote it in the conversation.
+        tool_input = {**tool_input, "customer_id": customer_id}
     try:
         if name == "refund_order":
             return function(**tool_input, approve_refund=approve_refund,

@@ -128,6 +128,29 @@ check("The model can't pass its own approval",
       run_tool("refund_order", {"customer_id": 4, "order_id": 1003, "approve_refund": True},
                approve_refund=supervisor_says(False)), "error")
 
+section("run_tool with a known customer (HTTP API: customer_id from the login token)")
+# Mona (customer 2) is logged in; the model was talked into using Yasmin's id (4).
+leaked = run_tool("get_orders_for_customer", {"customer_id": 4}, customer_id=2)
+check("Model asks for customer 4's orders: gets Mona's (customer 2) instead",
+      {} if leaked.get("customer_id") == 2 and {o["order_id"] for o in leaked["orders"]} == {1002, 1005}
+      else {"error": f"wrong orders: {leaked}"}, "ok")
+check("Model tracks Yasmin's order 1006 as customer 4: not found for Mona",
+      run_tool("track_shipment", {"customer_id": 4, "order_id": 1006}, customer_id=2), "error")
+check("Model refunds Yasmin's order 1006 (400 EGP) as customer 4: not found for Mona",
+      run_tool("refund_order", {"customer_id": 4, "order_id": 1006}, customer_id=2), "error")
+order_1006 = next(o for o in get_orders_for_customer(4)["orders"] if o["order_id"] == 1006)
+check("  ...and Yasmin's order 1006 was not refunded",
+      {"error": "refunded"} if order_1006["refunded"] else {}, "ok")
+check("Model looks up another customer by phone: refused",
+      run_tool("get_customer_by_phone", {"phone": "01234567890"}, customer_id=2), "error")
+inp = {"customer_id": 4, "order_id": 1005}
+check("Mona's own order 1005 still works, even if the model wrote 4",
+      run_tool("track_shipment", inp, customer_id=2), "ok")
+check("  ...and the model's own request was left as it wrote it",
+      {} if inp == {"customer_id": 4, "order_id": 1005} else {"error": "changed"}, "ok")
+check("Without customer_id (terminal, web page) the phone lookup still works",
+      run_tool("get_customer_by_phone", {"phone": "01098765432"}), "ok")
+
 section("Database after the tests")
 print_table(
     "orders that changed",
