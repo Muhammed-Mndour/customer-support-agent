@@ -205,7 +205,8 @@ class ConversationCreated(BaseModel):
 
 
 class MessageIn(BaseModel):
-    customer_id: int
+    # No customer_id: who is writing comes from the login token and the conversation.
+    # A customer_id sent anyway is ignored (Pydantic drops unknown fields).
     text: str = Field(min_length=1)
 
 
@@ -332,16 +333,19 @@ def create_conversation(customer: User = Depends(require_customer)):
     "/api/v1/conversations/{conversation_id}/messages",
     response_model=MessageReply,
 )
-def send_message(conversation_id: str, message: MessageIn):
+def send_message(conversation_id: str, message: MessageIn,
+                 customer: User = Depends(require_customer)):
     conversation = conversations.get(conversation_id)
-    if conversation is None:
+    # Someone else's conversation gets the same 404 as one that doesn't exist, so the
+    # reply doesn't confirm that it exists.
+    if conversation is None or conversation.customer_id != customer.customer_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found")
 
     # Big refunds are recorded as approval requests instead of waiting for a person.
     created = []
 
     def request_approval(details):
-        approval = approvals.create(conversation.id, message.customer_id,
+        approval = approvals.create(conversation.id, conversation.customer_id,
                                     details["order_id"], details["amount_egp"])
         created.append(approval)
         return approval.id
@@ -349,9 +353,9 @@ def send_message(conversation_id: str, message: MessageIn):
     # The agent loop adds its tool calls and answer to this same list, and the list
     # lives inside the stored conversation, so they are saved without another call.
     # Tell the model who is writing, so it doesn't have to ask for a phone number.
-    # The caller can claim any customer_id for now; Block 2 takes it from the login token.
+    # The id is the conversation's owner, which came from the login token.
     conversation.messages.append({"role": "user",
-                                  "content": CUSTOMER_TAG.format(message.customer_id) + message.text})
+                                  "content": CUSTOMER_TAG.format(conversation.customer_id) + message.text})
     result, reply = run_agent(conversation.messages, request_approval)
 
     if result != "done":
