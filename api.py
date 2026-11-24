@@ -9,7 +9,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, EmailStr, Field
 
 import agent  # importing it also loads .env (model, base URL, key)
@@ -111,11 +112,55 @@ class UserRepository:
         connection.close()
         return User(**row) if row else None
 
+    def get(self, user_id):
+        """Return the user with this id, or None (the token holds the id, not the email)."""
+        connection = get_connection()
+        row = connection.execute(
+            "SELECT id, email, password_hash, role, customer_id FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        connection.close()
+        return User(**row) if row else None
+
 
 # One of each for the whole app: every request must see the same data.
 conversations = ConversationRepository()
 approvals = ApprovalRepository()
 users = UserRepository()
+
+
+# --- Who is calling ----------------------------------------------------------------
+
+# Reads "Authorization: Bearer <token>" from the request. It is also what makes Swagger
+# show the Authorize button and a lock on every endpoint that uses get_current_user.
+# auto_error=False: when the header is missing we answer 401 ourselves, like every other
+# token problem, instead of FastAPI's own error.
+bearer_scheme = HTTPBearer(auto_error=False)
+
+NOT_AUTHENTICATED = "Not authenticated"
+
+
+def get_current_user(credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme)):
+    """Runs before every protected endpoint: token -> user, or 401.
+
+    An endpoint asks for it with `user: User = Depends(get_current_user)`.
+    """
+    def unauthorized():
+        return HTTPException(status.HTTP_401_UNAUTHORIZED, NOT_AUTHENTICATED,
+                             headers={"WWW-Authenticate": "Bearer"})
+
+    if credentials is None:                                   # no Authorization header
+        raise unauthorized()
+    try:
+        claims = auth.decode_access_token(credentials.credentials)
+    except auth.InvalidToken:                                 # edited, expired, forged, junk
+        raise unauthorized()
+    # The token is valid for 30 minutes, but the account may be gone by then
+    # (store.db rebuilt, account closed), so load it fresh from the table.
+    user = users.get(claims["user_id"])
+    if user is None:
+        raise unauthorized()
+    return user
 
 
 # --- Request and response models -------------------------------------------------
@@ -128,6 +173,14 @@ class LoginIn(BaseModel):
 class TokenOut(BaseModel):
     access_token: str
     token_type: Literal["bearer"] = "bearer"  # send it as "Authorization: Bearer <token>"
+
+
+class UserOut(BaseModel):
+    """What the API may show about an account. No password_hash, ever."""
+    id: int
+    email: str
+    role: Literal["customer", "supervisor"]
+    customer_id: int | None  # None for the supervisor
 
 
 class ConversationCreated(BaseModel):
@@ -239,6 +292,12 @@ def login(credentials: LoginIn):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, LOGIN_FAILED,
                             headers={"WWW-Authenticate": "Bearer"})
     return TokenOut(access_token=auth.create_access_token(user.id, user.role))
+
+
+@app.get("/api/v1/auth/me", response_model=UserOut)
+def me(user: User = Depends(get_current_user)):
+    """Who owns this token. Apps call it on start: 200 -> logged in, 401 -> show login."""
+    return UserOut(id=user.id, email=user.email, role=user.role, customer_id=user.customer_id)
 
 
 @app.post(
