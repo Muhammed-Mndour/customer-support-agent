@@ -30,6 +30,7 @@ model_client = make_client()  # Claude, Ollama or Gemini, from .env
 @dataclass
 class Conversation:
     id: str
+    customer_id: int  # its owner, taken from the login token when it is created
     messages: list = field(default_factory=list)  # in the agent's format, sent to the model
 
 
@@ -43,8 +44,8 @@ class ConversationRepository:
     def __init__(self):
         self._conversations = {}
 
-    def create(self):
-        conversation = Conversation(id=f"conv_{uuid.uuid4().hex[:12]}")
+    def create(self, customer_id):
+        conversation = Conversation(id=f"conv_{uuid.uuid4().hex[:12]}", customer_id=customer_id)
         self._conversations[conversation.id] = conversation
         return conversation
 
@@ -168,6 +169,14 @@ def require_supervisor(user: User = Depends(get_current_user)):
     no or bad token -> 401 (who are you?); a customer -> 403 (we know you, but no)."""
     if user.role != "supervisor":
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Only a supervisor can do this")
+    return user
+
+
+def require_customer(user: User = Depends(get_current_user)):
+    """For endpoints where a customer talks to the agent. The supervisor has no store
+    orders (customer_id is None), so it gets 403 here."""
+    if user.role != "customer":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only a customer can do this")
     return user
 
 
@@ -313,8 +322,9 @@ def me(user: User = Depends(get_current_user)):
     status_code=status.HTTP_201_CREATED,
     response_model=ConversationCreated,
 )
-def create_conversation():
-    conversation = conversations.create()
+def create_conversation(customer: User = Depends(require_customer)):
+    # The owner comes from the token, never from the request body.
+    conversation = conversations.create(customer.customer_id)
     return ConversationCreated(id=conversation.id)
 
 
