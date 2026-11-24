@@ -379,9 +379,15 @@ def send_message(conversation_id: str, message: MessageIn,
     "/api/v1/conversations/{conversation_id}/messages",
     response_model=ConversationHistory,
 )
-def get_messages(conversation_id: str, limit: int = Query(50, ge=1, le=200)):
+def get_messages(conversation_id: str, limit: int = Query(50, ge=1, le=200),
+                 user: User = Depends(get_current_user)):
     conversation = conversations.get(conversation_id)
-    if conversation is None:
+    # The owner may read it, and so may the supervisor (to see what the customer said
+    # before deciding a refund). Any other customer gets the same 404 as a missing one.
+    may_read = conversation is not None and (
+        user.role == "supervisor" or conversation.customer_id == user.customer_id
+    )
+    if not may_read:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation not found")
     return ConversationHistory(
         conversation_id=conversation.id,
