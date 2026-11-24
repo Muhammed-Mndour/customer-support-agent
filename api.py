@@ -5,13 +5,14 @@ Docs: http://localhost:8000/docs
 """
 
 import re
+import sqlite3
 import uuid
 from dataclasses import dataclass, field
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 import agent  # importing it also loads .env (model, base URL, key)
 import auth
@@ -96,6 +97,10 @@ class User:
     customer_id: int | None
 
 
+class AlreadyRegistered(Exception):
+    """The email or phone already belongs to an account. args[0] says which."""
+
+
 class UserRepository:
     """Reads accounts from the users table in store.db (built by db.py).
 
@@ -112,6 +117,33 @@ class UserRepository:
         ).fetchone()
         connection.close()
         return User(**row) if row else None
+
+    def create_customer(self, name, phone, email, password_hash):
+        """Register someone new: a store customer AND their login, in ONE transaction.
+
+        Both rows are written, or neither is. Without the transaction, a taken email
+        would fail on the second insert and leave a customer with no account, holding
+        on to that phone number forever.
+        Raises AlreadyRegistered("email" or "phone") if either is taken.
+        """
+        connection = get_connection()
+        try:
+            with connection:  # BEGIN ... COMMIT, or ROLLBACK if anything inside raises
+                customer_id = connection.execute(
+                    "INSERT INTO customers (name, phone) VALUES (?, ?)", (name, phone),
+                ).lastrowid
+                user_id = connection.execute(
+                    "INSERT INTO users (email, password_hash, role, customer_id)"
+                    " VALUES (?, ?, 'customer', ?)",
+                    (email, password_hash, customer_id),
+                ).lastrowid
+        except sqlite3.IntegrityError as error:  # a UNIQUE rule in the table said no
+            taken = "phone" if "customers.phone" in str(error) else "email"
+            raise AlreadyRegistered(taken) from error
+        finally:
+            connection.close()
+        return User(id=user_id, email=email, password_hash=password_hash,
+                    role="customer", customer_id=customer_id)
 
     def get(self, user_id):
         """Return the user with this id, or None (the token holds the id, not the email)."""
@@ -185,6 +217,34 @@ def require_customer(user: User = Depends(get_current_user)):
 class LoginIn(BaseModel):
     email: EmailStr
     password: str = Field(min_length=1)
+
+
+class RegisterIn(BaseModel):
+    # No role here: every account made by register is a customer. A "role" sent
+    # anyway is dropped, like any unknown field.
+    name: str = Field(min_length=1, max_length=100)
+    phone: str
+    email: EmailStr
+    # Max length: argon2 has no limit, but hashing a huge password on purpose would
+    # keep the server busy.
+    password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("name")
+    @classmethod
+    def name_not_blank(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError("name can't be blank")
+        return value
+
+    @field_validator("phone")
+    @classmethod
+    def egyptian_mobile(cls, value):
+        """Store it the way the tools look it up: '+20 100 111 2233' -> '01001112233'."""
+        phone = tools.normalize_phone(value)
+        if not re.fullmatch(r"01\d{9}", phone):
+            raise ValueError("must be an Egyptian mobile number, like 01001112233")
+        return phone
 
 
 class TokenOut(BaseModel):
@@ -300,6 +360,24 @@ def run_agent(messages, customer_id, request_approval=None):
 # --- Endpoints ---------------------------------------------------------------------
 
 LOGIN_FAILED = "Invalid email or password"  # one message for every failure
+
+
+@app.post("/api/v1/auth/register", status_code=status.HTTP_201_CREATED, response_model=UserOut)
+def register(body: RegisterIn):
+    """Open a store account: a new customer with no orders yet, who can log in at once.
+    Returns the account only; the customer then logs in to get a token."""
+    email = body.email.lower()
+    if users.get_by_email(email) is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Email already registered")
+    # Hash before opening the transaction: it's slow on purpose, and the database
+    # shouldn't wait on it.
+    password_hash = auth.hash_password(body.password)
+    try:
+        user = users.create_customer(body.name, body.phone, email, password_hash)
+    except AlreadyRegistered as taken:
+        # The phone, or the email if someone registered it a moment ago.
+        raise HTTPException(status.HTTP_409_CONFLICT, f"{taken.args[0].capitalize()} already registered")
+    return UserOut(id=user.id, email=user.email, role=user.role, customer_id=user.customer_id)
 
 
 @app.post("/api/v1/auth/login", response_model=TokenOut)

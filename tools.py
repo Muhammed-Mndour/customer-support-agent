@@ -12,8 +12,9 @@ from db import get_connection
 REFUND_APPROVAL_LIMIT = 500  # refunds above this amount (EGP) need a human
 
 
-def _normalize_phone(phone):
-    """Accept '010 1234 5678', '+201012345678', etc. and return '01012345678'."""
+def normalize_phone(phone):
+    """Accept '010 1234 5678', '+201012345678', etc. and return '01012345678'.
+    Also used by the API's register, so a phone is stored the way the tools look it up."""
     digits = re.sub(r"\D", "", phone)
     if digits.startswith("20") and len(digits) == 12:
         digits = "0" + digits[2:]
@@ -41,7 +42,7 @@ def get_customer_by_phone(phone):
     connection = get_connection()
     row = connection.execute(
         "SELECT id, name, phone FROM customers WHERE phone = ?",
-        (_normalize_phone(phone),),
+        (normalize_phone(phone),),
     ).fetchone()
     connection.close()
     if row is None:
